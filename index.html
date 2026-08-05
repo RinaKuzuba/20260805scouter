@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="theme-color" content="#04120A">
 <title>スカウター</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Reggae+One&display=swap" rel="stylesheet">
 <style>
 :root{
   --void:#04120A;
@@ -61,9 +64,11 @@ html,body{height:100%;overflow:hidden;background:var(--void);
 
 /* ---- alien glyphs ---- */
 #glyphs{position:absolute;left:12px;bottom:calc(12px + env(safe-area-inset-bottom));
-  display:flex;gap:9px;pointer-events:none;transform:skewX(-4deg)}
-#glyphs .col{color:var(--lens-dim);font-size:.62rem;line-height:1.55;
-  letter-spacing:.05em;text-align:center;text-shadow:0 0 4px rgba(140,255,168,.3)}
+  display:flex;gap:12px;pointer-events:none;transform:skewX(-5deg)}
+#glyphs .col{font-family:"Reggae One",var(--mono);color:rgba(140,255,168,.62);
+  font-size:1.05rem;line-height:1.32;letter-spacing:.04em;text-align:center;
+  text-shadow:0 0 7px rgba(140,255,168,.4)}
+#glyphs.rare .col{color:var(--alert);text-shadow:0 0 8px rgba(255,228,92,.6)}
 
 /* ---- minimal chrome ---- */
 #flip{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;
@@ -302,7 +307,7 @@ function drawReticle(det){
 
   // 円の外側・内向きの三角（ロック時のみ。外から吸い込まれて定位置に着く）
   if(det){
-    const p=Math.min(1,(performance.now()-lockAt)/300);
+    const p=Math.min(1,(performance.now()-lockAt)/800);
     const e=1-Math.pow(1-p,3);              // ease-out cubic
     const off=r*1.1*(1-e);                  // 開始時は定位置より外
     octx.save(); octx.globalAlpha=0.25+0.75*e;
@@ -371,7 +376,8 @@ function finish(){
 
   digits.textContent = label || fmt(power);
   digits.className='on'+(rare?' rare':'')+(label?' small':'');
-  if(rare){ beepRare(); const w=$('wash'); w.classList.remove('fire'); void w.offsetWidth; w.classList.add('fire'); }
+  if(rare){ beepRare(); glyphFrenzyUntil=Date.now()+2000;
+    const w=$('wash'); w.classList.remove('fire'); void w.offsetWidth; w.classList.add('fire'); }
   else beepLock();
 
   holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; $('wash').classList.remove('fire'); msg.textContent=''; },CFG.HOLD_MS);
@@ -381,23 +387,36 @@ function finish(){
 $('app').addEventListener('pointerdown',e=>{ if(e.target.id==='flip') return; scan(); });
 $('flip').addEventListener('pointerdown',e=>{ e.stopPropagation(); facing=facing==='user'?'environment':'user'; startCam(); });
 
-/* 左下の飾りグリフ。意味のないカタカナ+数字が時々入れ替わる */
+/* 左下の飾りグリフ。
+   通常: 350msごとに1文字入替 / スキャン中: 80msごと / レア: 60msで全文字乱れ */
 const GLYPH_SET='アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789';
 const glyphCols=[];
+let glyphFrenzyUntil=0;
 {
   const box=$('glyphs');
   const rnd=()=>GLYPH_SET[Math.floor(Math.random()*GLYPH_SET.length)];
-  for(const len of [6,4,5]){
+  for(const len of [5,4,4]){
     const col=document.createElement('div'); col.className='col';
     const chars=Array.from({length:len},rnd);
     col.innerHTML=chars.join('<br>');
     box.appendChild(col); glyphCols.push({el:col,chars});
   }
-  setInterval(()=>{
-    const c=glyphCols[Math.floor(Math.random()*glyphCols.length)];
-    c.chars[Math.floor(Math.random()*c.chars.length)]=rnd();
-    c.el.innerHTML=c.chars.join('<br>');
-  },350);
+  function tick(){
+    const frenzy = Date.now()<glyphFrenzyUntil;
+    box.classList.toggle('rare',frenzy);
+    if(frenzy){
+      for(const c of glyphCols){
+        c.chars=c.chars.map(rnd);
+        c.el.innerHTML=c.chars.join('<br>');
+      }
+    }else{
+      const c=glyphCols[Math.floor(Math.random()*glyphCols.length)];
+      c.chars[Math.floor(Math.random()*c.chars.length)]=rnd();
+      c.el.innerHTML=c.chars.join('<br>');
+    }
+    setTimeout(tick, frenzy?60 : state==='scanning'?80 : 350);
+  }
+  tick();
 }
 
 init();
