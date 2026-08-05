@@ -38,7 +38,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);
 /* ---- readout ---- */
 #hud{position:absolute;inset:0;pointer-events:none;
   display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
-  padding-bottom:calc(9vh + env(safe-area-inset-bottom))}
+  padding-bottom:calc(15vh + env(safe-area-inset-bottom))}
 
 #digits{font-size:clamp(3.2rem,17vw,7rem);line-height:1;font-weight:600;
   letter-spacing:.06em;font-variant-numeric:tabular-nums;
@@ -66,8 +66,8 @@ html,body{height:100%;overflow:hidden;background:var(--void);
 #glyphs{position:absolute;left:12px;bottom:calc(12px + env(safe-area-inset-bottom));
   display:flex;gap:12px;pointer-events:none;transform:skewX(-5deg)}
 #glyphs .col{font-family:"Reggae One",var(--mono);color:rgba(140,255,168,.62);
-  font-size:1.05rem;line-height:1.32;letter-spacing:.04em;text-align:center;
-  text-shadow:0 0 7px rgba(140,255,168,.4)}
+  font-size:1.05rem;line-height:1.42;letter-spacing:.06em;text-align:left;
+  font-variant-numeric:tabular-nums;text-shadow:0 0 7px rgba(140,255,168,.4)}
 #glyphs.rare .col{color:var(--alert);text-shadow:0 0 8px rgba(255,228,92,.6)}
 
 /* ---- minimal chrome ---- */
@@ -89,7 +89,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);
   <div id="wash"></div>
   <div id="glyphs"></div>
   <div id="title"><span class="t1">酔ッ払イ戦闘力スカウター</span><br><span class="t2">顔ニ向ケテ画面ヲタップ</span></div>
-  <div id="hud"><div id="digits">00000000</div></div>
+  <div id="hud"><div id="digits">0</div></div>
   <div id="msg">起動中</div>
   <div id="flip">⟳</div>
 </div>
@@ -143,7 +143,7 @@ const CFG = {
 };
 
 const $=id=>document.getElementById(id);
-const fmt=n=>String(n).padStart(8,'0');   // 原作の 00001300 形式
+const fmt=n=>String(n);   // 先頭ゼロなし（左下グリフとの重なり回避）
 const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
 const digits=$('digits'), msg=$('msg');
 const buf=document.createElement('canvas'); buf.width=buf.height=CFG.SAMPLE_PX;
@@ -342,7 +342,7 @@ function scan(){
   clearTimeout(holdTimer);
   state='scanning'; win=[]; diag={det:0,meas:0,frames:0}; msg.textContent='';
   digits.className='on'; beepScan();
-  scrambleTimer=setInterval(()=>{ digits.textContent=fmt(Math.floor(Math.random()*99999)); },60);
+  scrambleTimer=setInterval(()=>{ digits.textContent=String(1000+Math.floor(Math.random()*9000)); },60);
   setTimeout(()=>{ if(state==='scanning') finish(); },6000);   // 顔が取れなくても打ち切り
 }
 
@@ -387,15 +387,18 @@ function finish(){
 $('app').addEventListener('pointerdown',e=>{ if(e.target.id==='flip') return; scan(); });
 $('flip').addEventListener('pointerdown',e=>{ e.stopPropagation(); facing=facing==='user'?'environment':'user'; startCam(); });
 
-/* 左下の飾りグリフ。
-   通常: 350msごとに1文字入替 / スキャン中: 80msごと / レア: 60msで全文字乱れ */
-const GLYPH_SET='アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789';
+/* 左下グリフ = サイゼリヤのメニュー番号（酒中心、つまみを少し混ぜる）
+   通常: 350msごとに1つ入替 / スキャン中: 80msごと / レア: 60msで全部乱れ */
+const BOOZE=['3301','3302','3304','3306','3401','3402','3403','3404','3405','3406',
+             '3407','3408','3412','3413','3414','3415','3416','3419'];
+const SNACK=['1422','1423','1401','1405','1407','1402','1417','1408','3303'];
 const glyphCols=[];
 let glyphFrenzyUntil=0;
 {
   const box=$('glyphs');
-  const rnd=()=>GLYPH_SET[Math.floor(Math.random()*GLYPH_SET.length)];
-  for(const len of [5,4,4]){
+  const rnd=()=>{ const p = Math.random()<0.8 ? BOOZE : SNACK;
+                  return p[Math.floor(Math.random()*p.length)]; };
+  for(const len of [3,3]){
     const col=document.createElement('div'); col.className='col';
     const chars=Array.from({length:len},rnd);
     col.innerHTML=chars.join('<br>');
