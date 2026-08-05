@@ -129,7 +129,7 @@ bctx.imageSmoothingEnabled=true; bctx.imageSmoothingQuality='high';
 
 let detector=null, stream=null, facing='user';
 let state='boot', win=[], face=null, lastRare=0, holdTimer=null, scrambleTimer=null;
-let audio=null;
+let audio=null, loopStarted=false, diag={det:0,meas:0,frames:0};
 
 /* ---------------- audio ---------------- */
 function tone(f,dur,vol=.08,type='square',delay=0){
@@ -185,7 +185,7 @@ async function startCam(){
   video.srcObject=stream; await video.play();
   $('camwrap').classList.toggle('flip',facing==='user');
   state='idle'; msg.textContent='画面をタップ';
-  requestAnimationFrame(loop);
+  if(!loopStarted){ loopStarted=true; requestAnimationFrame(loop); }   // カメラ切替で二重起動しない
   try{ if('wakeLock' in navigator) await navigator.wakeLock.request('screen'); }catch(e){}
 }
 
@@ -202,28 +202,43 @@ function loop(now){
   drawReticle(face);
 
   if(state==='scanning'){
+    diag.frames++; if(face) diag.det++;
     const v=measure(face);
-    if(v!==null){ win.push(v); if(win.length>=CFG.SCAN_FRAMES) finish(); }
+    if(v!==null){ diag.meas++; win.push(v); if(win.length>=CFG.SCAN_FRAMES) finish(); }
   }
+}
+
+/* boundingBoxをピクセル座標に正規化して返す。
+   実装によっては0〜1の正規化座標が来るため、幅が2以下なら換算する */
+function getBox(det){
+  const b=det.boundingBox; if(!b) return null;
+  if(b.width<=2 && b.height<=2 && video.videoWidth>4)
+    return { originX:b.originX*video.videoWidth, originY:b.originY*video.videoHeight,
+             width:b.width*video.videoWidth,     height:b.height*video.videoHeight };
+  return b;
 }
 
 function centermost(d){
   if(!d.length) return null;
   const cx=video.videoWidth/2, cy=video.videoHeight/2;
   let best=null,bd=Infinity;
-  for(const x of d){ const b=x.boundingBox; if(!b) continue;
+  for(const x of d){ const b=getBox(x); if(!b) continue;
     const dx=b.originX+b.width/2-cx, dy=b.originY+b.height/2-cy, s=dx*dx+dy*dy;
     if(s<bd){bd=s;best=x;} }
   return best;
 }
 
-/* 顔中央60%を32x32へ縮小 → 平均RGB → 明るさ補正つき赤み */
+/* 顔中央60%を32x32へ縮小 → 平均RGB → 明るさ補正つき赤み。
+   顔が画面端で切れていても棄却せず、フレーム内にクランプして測る */
 function measure(det){
   if(!det) return null;
-  const b=det.boundingBox, m=(1-CFG.FACE_CROP)/2;
-  const sx=Math.round(b.originX+b.width*m), sy=Math.round(b.originY+b.height*m);
-  const sw=Math.round(b.width*CFG.FACE_CROP), sh=Math.round(b.height*CFG.FACE_CROP);
-  if(sw<4||sh<4||sx<0||sy<0||sx+sw>video.videoWidth||sy+sh>video.videoHeight) return null;
+  const b=getBox(det); if(!b) return null;
+  const m=(1-CFG.FACE_CROP)/2;
+  let sx=Math.round(b.originX+b.width*m), sy=Math.round(b.originY+b.height*m);
+  let sw=Math.round(b.width*CFG.FACE_CROP), sh=Math.round(b.height*CFG.FACE_CROP);
+  const x2=Math.min(sx+sw, video.videoWidth), y2=Math.min(sy+sh, video.videoHeight);
+  sx=Math.max(0,sx); sy=Math.max(0,sy); sw=x2-sx; sh=y2-sy;
+  if(sw<4||sh<4) return null;
   bctx.drawImage(video,sx,sy,sw,sh,0,0,CFG.SAMPLE_PX,CFG.SAMPLE_PX);
   let d; try{ d=bctx.getImageData(0,0,CFG.SAMPLE_PX,CFG.SAMPLE_PX).data; }catch(e){ return null; }
   let R=0,G=0,B=0,n=0;
@@ -238,7 +253,7 @@ function measure(det){
 function drawReticle(det){
   const W=overlay.width,H=overlay.height;
   let cx=W/2, cy=H/2, r=Math.min(W,H)*0.19;
-  if(det){ const b=det.boundingBox;
+  if(det){ const b=getBox(det);
     cx=b.originX+b.width/2; cy=b.originY+b.height/2; r=Math.max(b.width,b.height)*0.68; }
 
   const lw=Math.max(2,W/380);
@@ -275,15 +290,21 @@ function scan(){
   if(!audio){ try{ audio=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
   if(audio&&audio.state==='suspended') audio.resume();
   clearTimeout(holdTimer);
-  state='scanning'; win=[]; msg.textContent='';
+  state='scanning'; win=[]; diag={det:0,meas:0,frames:0}; msg.textContent='';
   digits.className='on'; beepScan();
   scrambleTimer=setInterval(()=>{ digits.textContent=Math.floor(Math.random()*9000+100).toLocaleString(); },60);
-  setTimeout(()=>{ if(state==='scanning') finish(); },4000);   // 顔が取れなくても打ち切り
+  setTimeout(()=>{ if(state==='scanning') finish(); },6000);   // 顔が取れなくても打ち切り
 }
 
 function finish(){
   clearInterval(scrambleTimer);
-  if(win.length<8){ state='idle'; digits.className=''; msg.textContent='画面をタップ'; return; }
+  if(win.length<3){
+    state='done'; digits.className='on small';
+    digits.textContent = diag.det===0 ? '対象ヲ検出デキズ' : '測定エラー';
+    msg.textContent = `det ${diag.det}/${diag.frames}  meas ${diag.meas}`;   // 原因切り分け用
+    holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; msg.textContent='画面をタップ'; },3000);
+    return;
+  }
   state='done';
 
   const mean=win.reduce((a,b)=>a+b,0)/win.length;
