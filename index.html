@@ -89,7 +89,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);
   <div id="wash"></div>
   <div id="glyphs"></div>
   <div id="title"><span class="t1">酔ッ払イ戦闘力スカウター</span><br><span class="t2">顔ニ向ケテ画面ヲタップ</span></div>
-  <div id="hud"><div id="digits">0</div></div>
+  <div id="hud"><div id="digits">00000000</div></div>
   <div id="msg">起動中</div>
   <div id="flip">⟳</div>
 </div>
@@ -143,7 +143,7 @@ const CFG = {
 };
 
 const $=id=>document.getElementById(id);
-const fmt=n=>String(n);   // 先頭ゼロなし（左下グリフとの重なり回避）
+const fmt=n=>String(n).padStart(8,'0');   // 原作の 00001300 形式
 const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
 const digits=$('digits'), msg=$('msg');
 const buf=document.createElement('canvas'); buf.width=buf.height=CFG.SAMPLE_PX;
@@ -342,7 +342,7 @@ function scan(){
   clearTimeout(holdTimer);
   state='scanning'; win=[]; diag={det:0,meas:0,frames:0}; msg.textContent='';
   digits.className='on'; beepScan();
-  scrambleTimer=setInterval(()=>{ digits.textContent=String(1000+Math.floor(Math.random()*9000)); },60);
+  scrambleTimer=setInterval(()=>{ digits.textContent=fmt(Math.floor(Math.random()*99999)); },60);
   setTimeout(()=>{ if(state==='scanning') finish(); },6000);   // 顔が取れなくても打ち切り
 }
 
