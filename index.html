@@ -59,6 +59,12 @@ html,body{height:100%;overflow:hidden;background:var(--void);
   text-shadow:0 0 6px rgba(140,255,168,.55)}
 #title .t2{margin-top:4px;color:var(--lens-dim);font-size:.62rem;letter-spacing:.24em;text-indent:.24em}
 
+/* ---- alien glyphs ---- */
+#glyphs{position:absolute;left:12px;bottom:calc(12px + env(safe-area-inset-bottom));
+  display:flex;gap:9px;pointer-events:none;transform:skewX(-4deg)}
+#glyphs .col{color:var(--lens-dim);font-size:.62rem;line-height:1.55;
+  letter-spacing:.05em;text-align:center;text-shadow:0 0 4px rgba(140,255,168,.3)}
+
 /* ---- minimal chrome ---- */
 #flip{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;
   width:44px;height:44px;border:1px solid var(--lens-dim);border-radius:50%;
@@ -76,6 +82,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);
   <div id="camwrap"><video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas></div>
   <div id="glass"></div>
   <div id="wash"></div>
+  <div id="glyphs"></div>
   <div id="title"><span class="t1">酔ッ払イ戦闘力スカウター</span><br><span class="t2">顔ニ向ケテ画面ヲタップ</span></div>
   <div id="hud"><div id="digits">00000000</div></div>
   <div id="msg">起動中</div>
@@ -141,6 +148,7 @@ bctx.imageSmoothingEnabled=true; bctx.imageSmoothingQuality='high';
 let detector=null, stream=null, facing='user';
 let state='boot', win=[], face=null, lastRare=0, holdTimer=null, scrambleTimer=null;
 let audio=null, loopStarted=false, diag={det:0,meas:0,frames:0};
+let lockAt=0, lastFaceT=0;   // 三角の吸い込みアニメ用
 
 /* ---------------- audio ---------------- */
 function tone(f,dur,vol=.08,type='square',delay=0){
@@ -208,6 +216,11 @@ function loop(now){
 
   let dets=[]; try{ dets=detector.detectForVideo(video,now).detections||[]; }catch(e){ return; }
   face=centermost(dets);
+  if(face){
+    const t=performance.now();
+    if(t-lastFaceT>350) lockAt=t;   // 350ms以上見失った後の再捕捉で発火（瞬断では再生しない）
+    lastFaceT=t;
+  }
 
   octx.clearRect(0,0,overlay.width,overlay.height);
   drawReticle(face);
@@ -287,9 +300,13 @@ function drawReticle(det){
     octx.stroke();
   });
 
-  // 円の外側・内向きの三角（ロック時のみ。輪の外から食い込む形）
+  // 円の外側・内向きの三角（ロック時のみ。外から吸い込まれて定位置に着く）
   if(det){
-    const tipR=r*1.07, baseR=r*1.30, half=r*0.10;
+    const p=Math.min(1,(performance.now()-lockAt)/300);
+    const e=1-Math.pow(1-p,3);              // ease-out cubic
+    const off=r*1.1*(1-e);                  // 開始時は定位置より外
+    octx.save(); octx.globalAlpha=0.25+0.75*e;
+    const tipR=r*1.07+off, baseR=r*1.30+off, half=r*0.10;
     [[0,-1],[0,1],[-1,0],[1,0]].forEach(([ux,uy])=>{
       const px=-uy, py=ux;   // 進行方向に直交する単位ベクトル
       octx.beginPath();
@@ -298,6 +315,7 @@ function drawReticle(det){
       octx.lineTo(cx+ux*baseR-px*half,  cy+uy*baseR-py*half);
       octx.closePath(); octx.fill();
     });
+    octx.restore();
   }
 
   // 走査線（円内にクリップ）
@@ -362,6 +380,25 @@ function finish(){
 /* ---------------- input ---------------- */
 $('app').addEventListener('pointerdown',e=>{ if(e.target.id==='flip') return; scan(); });
 $('flip').addEventListener('pointerdown',e=>{ e.stopPropagation(); facing=facing==='user'?'environment':'user'; startCam(); });
+
+/* 左下の飾りグリフ。意味のないカタカナ+数字が時々入れ替わる */
+const GLYPH_SET='アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789';
+const glyphCols=[];
+{
+  const box=$('glyphs');
+  const rnd=()=>GLYPH_SET[Math.floor(Math.random()*GLYPH_SET.length)];
+  for(const len of [6,4,5]){
+    const col=document.createElement('div'); col.className='col';
+    const chars=Array.from({length:len},rnd);
+    col.innerHTML=chars.join('<br>');
+    box.appendChild(col); glyphCols.push({el:col,chars});
+  }
+  setInterval(()=>{
+    const c=glyphCols[Math.floor(Math.random()*glyphCols.length)];
+    c.chars[Math.floor(Math.random()*c.chars.length)]=rnd();
+    c.el.innerHTML=c.chars.join('<br>');
+  },350);
+}
 
 init();
 </script>
