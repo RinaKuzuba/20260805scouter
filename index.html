@@ -223,7 +223,7 @@ function loop(now){
   face=centermost(dets);
   if(face){
     const t=performance.now();
-    if(t-lastFaceT>350) lockAt=t;   // 350ms以上見失った後の再捕捉で発火（瞬断では再生しない）
+    if(t-lastFaceT>600) lockAt=t;   // 600ms以上見失った後の再捕捉で発火（瞬断では再生しない）
     lastFaceT=t;
   }
 
@@ -307,7 +307,7 @@ function drawReticle(det){
 
   // 円の外側・内向きの三角（ロック時のみ。外から吸い込まれて定位置に着く）
   if(det){
-    const p=Math.min(1,(performance.now()-lockAt)/800);
+    const p=Math.min(1,(performance.now()-lockAt)/1600);
     const e=1-Math.pow(1-p,3);              // ease-out cubic
     const off=r*1.1*(1-e);                  // 開始時は定位置より外
     octx.save(); octx.globalAlpha=0.25+0.75*e;
