@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#04120A">
+<title>スカウター</title>
+<style>
+:root{
+  --void:#04120A;
+  --lens:#8CFFA8;
+  --lens-dim:rgba(140,255,168,.34);
+  --alert:#FFE45C;
+  --mono: ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--void);
+  font-family:var(--mono);user-select:none;-webkit-user-select:none}
+
+#app{position:fixed;inset:0}
+
+/* ---- camera (mirrored via CSS when front-facing) ---- */
+#camwrap{position:absolute;inset:0}
+#camwrap.flip{transform:scaleX(-1)}
+#video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  filter:grayscale(1) sepia(1) hue-rotate(63deg) saturate(3.4) contrast(1.15) brightness(.82)}
+#overlay{position:absolute;inset:0;width:100%;height:100%}
+
+/* ---- lens tint + scanlines ---- */
+#glass{position:absolute;inset:0;pointer-events:none;
+  background:
+    repeating-linear-gradient(to bottom, rgba(4,18,10,.34) 0 1px, transparent 1px 3px),
+    radial-gradient(120% 90% at 50% 45%, transparent 40%, rgba(4,18,10,.85) 100%)}
+
+/* ---- readout ---- */
+#hud{position:absolute;inset:0;pointer-events:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+  padding-bottom:calc(9vh + env(safe-area-inset-bottom))}
+
+#digits{font-size:clamp(3.2rem,17vw,7rem);line-height:1;font-weight:600;
+  letter-spacing:.06em;font-variant-numeric:tabular-nums;
+  color:var(--lens);text-shadow:0 0 6px rgba(140,255,168,.65),0 0 26px rgba(140,255,168,.32);
+  transform:skewX(-7deg);white-space:nowrap;opacity:0;transition:opacity .18s}
+#digits.on{opacity:1}
+#digits.rare{color:var(--alert);text-shadow:0 0 8px rgba(255,228,92,.8),0 0 34px rgba(255,228,92,.45)}
+#digits.small{font-size:clamp(2rem,10vw,4rem)}
+
+/* ---- rare alarm wash ---- */
+#wash{position:absolute;inset:0;pointer-events:none;background:var(--alert);opacity:0}
+#wash.fire{animation:flash 1.6s steps(1) 4}
+@keyframes flash{0%,49%{opacity:0}50%,99%{opacity:.18}}
+
+/* ---- minimal chrome ---- */
+#flip{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;
+  width:44px;height:44px;border:1px solid var(--lens-dim);border-radius:50%;
+  background:rgba(4,18,10,.5);color:var(--lens-dim);font-size:1.1rem;
+  display:grid;place-items:center;cursor:pointer}
+#msg{position:absolute;top:50%;left:0;right:0;transform:translateY(-50%);
+  text-align:center;color:var(--lens-dim);font-size:.82rem;letter-spacing:.28em;
+  padding:0 24px;line-height:2}
+
+@media (prefers-reduced-motion:reduce){#wash.fire{animation:none;opacity:.18}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="camwrap"><video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas></div>
+  <div id="glass"></div>
+  <div id="wash"></div>
+  <div id="hud"><div id="digits">0</div></div>
+  <div id="msg">起動中</div>
+  <div id="flip">⟳</div>
+</div>
+
+<script type="module">
+/* MediaPipe の読み込み。
+   バグ修正: パッケージのルートURLは main フィールド(=CommonJSの .cjs)に解決されるため
+   ESM import が失敗する。vision_bundle.mjs を明示する必要がある。 */
+const MP = {
+  versions: ["1.0.1", "0.10.14"],
+  cdns: ["https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@",
+         "https://unpkg.com/@mediapipe/tasks-vision@"],
+  model: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+};
+let FilesetResolver=null, FaceDetector=null, wasmBase=null, mpTag='';
+
+async function loadMP(){
+  let last;
+  for(const v of MP.versions) for(const cdn of MP.cdns){
+    const root = cdn + v;
+    try{
+      const m = await import(root + "/vision_bundle.mjs");
+      if(!m.FilesetResolver || !m.FaceDetector) throw new Error('exports missing');
+      FilesetResolver=m.FilesetResolver; FaceDetector=m.FaceDetector;
+      wasmBase=root+"/wasm"; mpTag=v;
+      return;
+    }catch(e){ last=e; }
+  }
+  throw last;
+}
+
+/* =======================================================================
+   CFG
+   [実測] = アップロード画像から算出   [推定] = 未検証。実測後に要調整
+   ======================================================================= */
+const CFG = {
+  BASELINE:      0.3748,      // [実測] 腕の内側 R/(R+G+B)、明るさV=130に補正
+  BRIGHT_SLOPE: -0.00033732,  // [実測] 明るさ1あたりの見かけの赤み変化
+  REF_V:         130,         // [実測] 補正の基準明るさ
+  NOISE_SD:      0.0066,      // [実測] 補正後の残ノイズ（参考値）
+
+  SPAN_NORMAL:   0.030,       // [推定] 戦闘力1200に到達する差分
+  SPAN_HIGH:     0.060,       // [推定] 戦闘力9000に到達する差分
+
+  P_MAX: 1200, P_HIGH: 9000, P_SUPER: 530000, P_TOP: 1000000,
+  ODDS_SUPER: 0.08, ODDS_TOP: 0.01, ODDS_NULL: 0.03,
+  RARE_COOLDOWN_MS: 180000,   // レア後は再抽選を封じる
+
+  FACE_CROP: 0.60, SAMPLE_PX: 32, MIN_CONF: 0.30,
+  SCAN_FRAMES: 30, HOLD_MS: 6000,
+};
+
+const $=id=>document.getElementById(id);
+const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
+const digits=$('digits'), msg=$('msg');
+const buf=document.createElement('canvas'); buf.width=buf.height=CFG.SAMPLE_PX;
+const bctx=buf.getContext('2d',{willReadFrequently:true});
+bctx.imageSmoothingEnabled=true; bctx.imageSmoothingQuality='high';
+
+let detector=null, stream=null, facing='user';
+let state='boot', win=[], face=null, lastRare=0, holdTimer=null, scrambleTimer=null;
+let audio=null;
+
+/* ---------------- audio ---------------- */
+function tone(f,dur,vol=.08,type='square',delay=0){
+  if(!audio) return;
+  const o=audio.createOscillator(), g=audio.createGain();
+  o.type=type; o.frequency.value=f; o.connect(g); g.connect(audio.destination);
+  const t=audio.currentTime+delay;
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.01);
+  g.gain.setValueAtTime(vol,t+dur-.02); g.gain.linearRampToValueAtTime(0,t+dur);
+  o.start(t); o.stop(t+dur+.02);
+}
+const beepScan =()=>{ for(let i=0;i<5;i++) tone(1500,.045,.05,'square',i*.13); };
+const beepLock =()=>{ tone(880,.09,.09); tone(1320,.16,.09,'square',.09); };
+const beepRare =()=>{ for(let i=0;i<7;i++){ tone(1750,.11,.11,'sawtooth',i*.19); tone(1180,.11,.09,'sawtooth',i*.19+.09);} };
+
+/* ---------------- init ---------------- */
+function bail(code,detail){
+  msg.innerHTML = code + '<br><span style="font-size:.7rem;letter-spacing:.1em;opacity:.7">'
+    + detail + '</span>';
+}
+
+async function init(){
+  try{ await loadMP(); }
+  catch(e){
+    const framed = (()=>{ try{ return window.self!==window.top; }catch(_){ return true; } })();
+    return bail('E1 モジュール取得失敗', framed
+      ? 'このプレビュー画面は外部CDNを遮断しています。コードに問題はありません。GitHub Pagesに置くか、PCのブラウザで直接開いてください'
+      : 'CDNに届いていません。ネット接続を確認してください');
+  }
+
+  let fs;
+  try{ fs = await FilesetResolver.forVisionTasks(wasmBase); }
+  catch(e){ return bail('E2 WASM取得失敗','通信は通っていますがWASMが落ちてきません'); }
+
+  for(const delegate of ["GPU","CPU"]){
+    try{
+      detector = await FaceDetector.createFromOptions(fs,{
+        baseOptions:{ modelAssetPath: MP.model, delegate },
+        runningMode:"VIDEO", minDetectionConfidence:CFG.MIN_CONF });
+      break;
+    }catch(e){ detector=null; }
+  }
+  if(!detector) return bail('E3 モデル取得失敗','GPU/CPUとも初期化できませんでした');
+
+  await startCam();
+}
+
+async function startCam(){
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1280},height:{ideal:960}},audio:false});
+  }catch(e){ msg.textContent='カメラ不可'; return; }
+  video.srcObject=stream; await video.play();
+  $('camwrap').classList.toggle('flip',facing==='user');
+  state='idle'; msg.textContent='画面をタップ';
+  requestAnimationFrame(loop);
+  try{ if('wakeLock' in navigator) await navigator.wakeLock.request('screen'); }catch(e){}
+}
+
+/* ---------------- loop ---------------- */
+function loop(now){
+  requestAnimationFrame(loop);
+  if(!detector||video.readyState<2) return;
+  if(overlay.width!==video.videoWidth){ overlay.width=video.videoWidth; overlay.height=video.videoHeight; }
+
+  let dets=[]; try{ dets=detector.detectForVideo(video,now).detections||[]; }catch(e){ return; }
+  face=centermost(dets);
+
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  drawReticle(face);
+
+  if(state==='scanning'){
+    const v=measure(face);
+    if(v!==null){ win.push(v); if(win.length>=CFG.SCAN_FRAMES) finish(); }
+  }
+}
+
+function centermost(d){
+  if(!d.length) return null;
+  const cx=video.videoWidth/2, cy=video.videoHeight/2;
+  let best=null,bd=Infinity;
+  for(const x of d){ const b=x.boundingBox; if(!b) continue;
+    const dx=b.originX+b.width/2-cx, dy=b.originY+b.height/2-cy, s=dx*dx+dy*dy;
+    if(s<bd){bd=s;best=x;} }
+  return best;
+}
+
+/* 顔中央60%を32x32へ縮小 → 平均RGB → 明るさ補正つき赤み */
+function measure(det){
+  if(!det) return null;
+  const b=det.boundingBox, m=(1-CFG.FACE_CROP)/2;
+  const sx=Math.round(b.originX+b.width*m), sy=Math.round(b.originY+b.height*m);
+  const sw=Math.round(b.width*CFG.FACE_CROP), sh=Math.round(b.height*CFG.FACE_CROP);
+  if(sw<4||sh<4||sx<0||sy<0||sx+sw>video.videoWidth||sy+sh>video.videoHeight) return null;
+  bctx.drawImage(video,sx,sy,sw,sh,0,0,CFG.SAMPLE_PX,CFG.SAMPLE_PX);
+  let d; try{ d=bctx.getImageData(0,0,CFG.SAMPLE_PX,CFG.SAMPLE_PX).data; }catch(e){ return null; }
+  let R=0,G=0,B=0,n=0;
+  for(let i=0;i<d.length;i+=4){ R+=d[i]; G+=d[i+1]; B+=d[i+2]; n++; }
+  R/=n; G/=n; B/=n;
+  const s=R+G+B; if(s<=0) return null;
+  const V=s/3;
+  return (R/s) - CFG.BRIGHT_SLOPE*(V-CFG.REF_V);   // 明るさ補正
+}
+
+/* ---------------- reticle ---------------- */
+function drawReticle(det){
+  const W=overlay.width,H=overlay.height;
+  let cx=W/2, cy=H/2, r=Math.min(W,H)*0.19;
+  if(det){ const b=det.boundingBox;
+    cx=b.originX+b.width/2; cy=b.originY+b.height/2; r=Math.max(b.width,b.height)*0.68; }
+
+  const lw=Math.max(2,W/380);
+  octx.strokeStyle= det?'rgba(140,255,168,.95)':'rgba(140,255,168,.35)';
+  octx.lineWidth=lw;
+  octx.beginPath();
+  for(let i=0;i<6;i++){
+    const a=Math.PI/3*i-Math.PI/2, x=cx+r*Math.cos(a), y=cy+r*Math.sin(a);
+    i?octx.lineTo(x,y):octx.moveTo(x,y);
+  }
+  octx.closePath(); octx.stroke();
+
+  if(det){
+    octx.lineWidth=lw*1.9;
+    const k=r*0.34;
+    [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sy])=>{
+      octx.beginPath();
+      octx.moveTo(cx+sx*r*1.18-sx*k, cy+sy*r*1.02);
+      octx.lineTo(cx+sx*r*1.18,       cy+sy*r*1.02);
+      octx.lineTo(cx+sx*r*1.18,       cy+sy*r*1.02-sy*k);
+      octx.stroke();
+    });
+  }
+  if(state==='scanning'){
+    const y=cy-r+((performance.now()/4)%(r*2));
+    octx.strokeStyle='rgba(140,255,168,.6)'; octx.lineWidth=lw;
+    octx.beginPath(); octx.moveTo(cx-r,y); octx.lineTo(cx+r,y); octx.stroke();
+  }
+}
+
+/* ---------------- scan ---------------- */
+function scan(){
+  if(state!=='idle'&&state!=='done') return;
+  if(!audio){ try{ audio=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  if(audio&&audio.state==='suspended') audio.resume();
+  clearTimeout(holdTimer);
+  state='scanning'; win=[]; msg.textContent='';
+  digits.className='on'; beepScan();
+  scrambleTimer=setInterval(()=>{ digits.textContent=Math.floor(Math.random()*9000+100).toLocaleString(); },60);
+  setTimeout(()=>{ if(state==='scanning') finish(); },4000);   // 顔が取れなくても打ち切り
+}
+
+function finish(){
+  clearInterval(scrambleTimer);
+  if(win.length<8){ state='idle'; digits.className=''; msg.textContent='画面をタップ'; return; }
+  state='done';
+
+  const mean=win.reduce((a,b)=>a+b,0)/win.length;
+  const delta=mean-CFG.BASELINE;
+  let power, rare=false, label;
+
+  if(delta<=0) power=5;
+  else if(delta<CFG.SPAN_NORMAL) power=Math.round(5+(delta/CFG.SPAN_NORMAL)*(CFG.P_MAX-5));
+  else if(delta<CFG.SPAN_HIGH)   power=Math.round(CFG.P_MAX+((delta-CFG.SPAN_NORMAL)/(CFG.SPAN_HIGH-CFG.SPAN_NORMAL))*(CFG.P_HIGH-CFG.P_MAX));
+  else power=CFG.P_HIGH;
+
+  if(power>=CFG.P_MAX && Date.now()-lastRare>CFG.RARE_COOLDOWN_MS){
+    const roll=Math.random();
+    if(roll<CFG.ODDS_TOP){ power=CFG.P_TOP; rare=true; }
+    else if(roll<CFG.ODDS_TOP+CFG.ODDS_NULL){ label='測定不能'; rare=true; }
+    else if(roll<CFG.ODDS_TOP+CFG.ODDS_NULL+CFG.ODDS_SUPER){ power=CFG.P_SUPER; rare=true; }
+    if(rare) lastRare=Date.now();
+  }
+
+  digits.textContent = label || power.toLocaleString();
+  digits.className='on'+(rare?' rare':'')+(label?' small':'');
+  if(rare){ beepRare(); const w=$('wash'); w.classList.remove('fire'); void w.offsetWidth; w.classList.add('fire'); }
+  else beepLock();
+
+  holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; $('wash').classList.remove('fire'); msg.textContent='画面をタップ'; },CFG.HOLD_MS);
+}
+
+/* ---------------- input ---------------- */
+$('app').addEventListener('pointerdown',e=>{ if(e.target.id==='flip') return; scan(); });
+$('flip').addEventListener('pointerdown',e=>{ e.stopPropagation(); facing=facing==='user'?'environment':'user'; startCam(); });
+
+init();
+</script>
+</body>
+</html>

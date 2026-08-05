@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>赤み測定 — 較正用</title>
+<style>
+:root{
+  --ink:#1A1015;
+  --panel:#241821;
+  --panel2:#2E1F29;
+  --rule:#3E2B36;
+  --text:#EDE2E7;
+  --muted:#9C8792;
+  --read:#7FE3D4;
+  --sample:#E8615D;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ink);color:var(--text);font-family:var(--sans)}
+body{padding:14px 14px 40px;max-width:560px;margin:0 auto;-webkit-text-size-adjust:100%}
+
+.eyebrow{font-size:.66rem;letter-spacing:.2em;color:var(--muted);margin-bottom:4px}
+h1{font-size:1.02rem;font-weight:600;letter-spacing:.02em;margin-bottom:2px}
+.sub{font-size:.74rem;color:var(--muted);line-height:1.5;margin-bottom:14px}
+
+/* ---- preview ---- */
+.stage{position:relative;background:#000;border:1px solid var(--rule);border-radius:3px;overflow:hidden;aspect-ratio:4/3}
+.flip{transform:scaleX(-1)}
+#video,#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#video{display:block}
+
+.status{position:absolute;left:0;right:0;bottom:0;padding:6px 9px;font:500 .68rem/1.4 var(--mono);
+  letter-spacing:.06em;background:rgba(26,16,21,.82);color:var(--muted);display:flex;justify-content:space-between;gap:10px}
+.status .lock{color:var(--sample)}
+.status .lock.on{color:var(--read)}
+
+/* ---- readout ---- */
+.readout{margin-top:16px;padding:16px 14px 14px;background:var(--panel);border:1px solid var(--rule);border-radius:3px}
+.big{font-family:var(--mono);font-size:3.6rem;line-height:.95;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;color:var(--read)}
+.big.stale{color:var(--muted);opacity:.45}
+.bigrow{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.sigma{font-family:var(--mono);font-size:1rem;color:var(--sample);font-variant-numeric:tabular-nums}
+.lbl{font-size:.62rem;letter-spacing:.2em;color:var(--muted);margin-bottom:9px}
+
+/* ---- signature: noise band scale ---- */
+.scale{margin-top:20px}
+.track{position:relative;height:52px;background:var(--panel2);border:1px solid var(--rule);border-radius:2px;overflow:hidden}
+.band{position:absolute;top:0;bottom:0;background:rgba(232,97,93,.22);border-left:1px solid rgba(232,97,93,.5);border-right:1px solid rgba(232,97,93,.5)}
+.mean{position:absolute;top:0;bottom:0;width:2px;background:var(--sample)}
+.live{position:absolute;top:0;bottom:0;width:1px;background:var(--read)}
+.tick{position:absolute;top:0;bottom:0;width:1px;background:var(--rule)}
+.ends{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.64rem;color:var(--muted);margin-top:5px}
+.caption{font-size:.7rem;color:var(--muted);line-height:1.55;margin-top:9px}
+.caption b{color:var(--sample);font-weight:600}
+
+/* ---- provisional ---- */
+.prov{margin-top:14px;padding-top:12px;border-top:1px solid var(--rule);display:flex;justify-content:space-between;align-items:baseline}
+.prov .v{font-family:var(--mono);font-size:1.35rem;font-variant-numeric:tabular-nums}
+
+/* ---- controls ---- */
+.controls{margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button,input[type=text]{font-family:var(--sans);font-size:.84rem;border-radius:3px;border:1px solid var(--rule)}
+button{padding:12px 10px;background:var(--panel);color:var(--text);cursor:pointer;letter-spacing:.03em}
+button:hover{background:var(--panel2)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--read);outline-offset:2px}
+button.primary{grid-column:1/-1;background:var(--read);color:#10201E;border-color:var(--read);font-weight:600}
+button:disabled{opacity:.35;cursor:not-allowed}
+input[type=text]{grid-column:1/-1;padding:11px 10px;background:var(--panel);color:var(--text)}
+input[type=text]::placeholder{color:var(--muted)}
+
+/* ---- log ---- */
+.log{margin-top:22px}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.7rem;font-variant-numeric:tabular-nums}
+th{text-align:left;font-weight:500;color:var(--muted);letter-spacing:.12em;font-size:.6rem;padding:0 6px 6px 0;border-bottom:1px solid var(--rule)}
+td{padding:7px 6px 7px 0;border-bottom:1px solid var(--rule);color:var(--text)}
+td.note{font-family:var(--sans);color:var(--muted)}
+.empty{font-size:.74rem;color:var(--muted);padding:14px 0;line-height:1.6}
+
+.err{margin-top:14px;padding:12px;border:1px solid var(--sample);border-radius:3px;font-size:.76rem;line-height:1.6;color:var(--text);display:none}
+.err.show{display:block}
+.err b{color:var(--sample)}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<p class="eyebrow">CALIBRATION</p>
+<h1>顔の赤み測定</h1>
+<p class="sub">顔の中央60%で R/(R+G+B) を測ります。数値そのものより、<b style="color:var(--sample)">ブレ幅（σ）が酔いによる変化より小さいか</b>を見るための道具です。</p>
+
+<div class="stage" id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="overlay"></canvas>
+  <div class="status">
+    <span class="lock" id="lockState">初期化中</span>
+    <span id="fps">— fps</span>
+  </div>
+</div>
+
+<div class="err" id="err"></div>
+
+<div class="readout">
+  <p class="lbl">R / (R+G+B) — 直近30フレーム平均</p>
+  <div class="bigrow">
+    <span class="big stale" id="mean">0.0000</span>
+    <span class="sigma" id="sigma">σ —</span>
+  </div>
+
+  <div class="scale">
+    <div class="track" id="track">
+      <div class="tick" style="left:25%"></div>
+      <div class="tick" style="left:50%"></div>
+      <div class="tick" style="left:75%"></div>
+      <div class="band" id="band" style="display:none"></div>
+      <div class="mean" id="meanMark" style="display:none"></div>
+      <div class="live" id="liveMark" style="display:none"></div>
+    </div>
+    <div class="ends"><span id="dmin">0.3000</span><span id="dmax">0.4500</span></div>
+    <p class="caption">赤い帯が<b>ノイズの幅（±1σ）</b>。しらふと風呂上がりで帯が重ならなければ、この企画は成立します。</p>
+  </div>
+
+  <div class="prov">
+    <span class="lbl" style="margin:0">暫定マッピング（戦闘力）</span>
+    <span class="v" id="power">—</span>
+  </div>
+</div>
+
+<div class="controls">
+  <input type="text" id="note" placeholder="メモ（例：しらふ・室内蛍光灯）" autocomplete="off">
+  <button id="logBtn" class="primary" disabled>この値を記録</button>
+  <button id="camBtn">カメラ切替</button>
+  <button id="csvBtn" disabled>CSVを保存</button>
+</div>
+
+<div class="log">
+  <p class="lbl">記録</p>
+  <table id="tbl" style="display:none">
+    <thead><tr><th>時刻</th><th>平均</th><th>σ</th><th style="width:38%">メモ</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <p class="empty" id="logEmpty">まだ記録がありません。顔をロックした状態で「この値を記録」を押すと、平均・σ・メモが1行ずつ溜まります。</p>
+</div>
+
+<script type="module">
+/* パッケージのルートURLは CommonJS に解決されるため vision_bundle.mjs を明示する */
+let FilesetResolver=null, FaceDetector=null, wasmBase=null;
+{
+  let ok=false, last;
+  for(const v of ["1.0.1","0.10.14"])
+    for(const cdn of ["https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@","https://unpkg.com/@mediapipe/tasks-vision@"]){
+      if(ok) continue;
+      const root=cdn+v;
+      try{
+        const m=await import(root+"/vision_bundle.mjs");
+        if(!m.FilesetResolver||!m.FaceDetector) throw new Error('exports missing');
+        FilesetResolver=m.FilesetResolver; FaceDetector=m.FaceDetector; wasmBase=root+"/wasm"; ok=true;
+      }catch(e){ last=e; }
+    }
+}
+
+/* ==========================================================
+   CONFIG — 実測後に調整する定数はすべてここ
+   ========================================================== */
+const CFG = {
+  WINDOW:        30,     // 移動窓のフレーム数
+  FACE_CROP:     0.60,   // 顔枠の中央何割をサンプルするか
+  SAMPLE_PX:     32,     // サンプル用キャンバス辺長（32x32=1024px）
+  MIN_CONF:      0.30,   // 顔検出の信頼度しきい値（暗所対策で低め）
+  DOMAIN_MIN:    0.3000, // 表示スケール下限（暫定・要実測）
+  DOMAIN_MAX:    0.4500, // 表示スケール上限（暫定・要実測）
+  POWER_MIN:     5,      // 素面のおじさん
+  POWER_MAX:     1200,   // 栽培マン
+};
+
+const $ = id => document.getElementById(id);
+const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
+const sample=document.createElement('canvas');
+sample.width=sample.height=CFG.SAMPLE_PX;
+const sctx=sample.getContext('2d',{willReadFrequently:true});
+sctx.imageSmoothingEnabled=true; sctx.imageSmoothingQuality='high';
+
+let detector=null, stream=null, facing='user', running=false;
+let win=[], lastRaw=null, lastT=0, fps=0, rows=[];
+
+function fail(msg){ const e=$('err'); e.innerHTML=msg; e.classList.add('show'); }
+function clearFail(){ $('err').classList.remove('show'); }
+
+/* ---------- init ---------- */
+async function init(){
+  try{
+    if(!FilesetResolver) throw new Error('module load failed');
+    const fileset = await FilesetResolver.forVisionTasks(wasmBase);
+    detector = await FaceDetector.createFromOptions(fileset,{
+      baseOptions:{
+        modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        delegate:"GPU"
+      },
+      runningMode:"VIDEO",
+      minDetectionConfidence: CFG.MIN_CONF
+    });
+  }catch(e){
+    const framed=(()=>{try{return window.self!==window.top;}catch(_){return true;}})();
+    fail(framed
+      ? '<b>顔検出モデルを読み込めませんでした。</b><br>このプレビュー画面は外部CDNを遮断しています。コードの問題ではありません。GitHub Pagesに置くか、PCのブラウザで直接開いてください。'
+      : '<b>顔検出モデルを読み込めませんでした。</b><br>ネット接続を確認してください。初回起動は通信が必要です。');
+    $('lockState').textContent='モデル未読込';
+    return;
+  }
+  await startCam();
+}
+
+async function startCam(){
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:facing, width:{ideal:1280}, height:{ideal:960} }, audio:false });
+  }catch(e){
+    fail('<b>カメラを使えませんでした。</b><br>ブラウザのカメラ許可を確認してください。HTTPS（またはlocalhost）でないと動きません。');
+    $('lockState').textContent='カメラ不可';
+    return;
+  }
+  clearFail();
+  video.srcObject=stream;
+  await video.play();
+  $('stage').classList.toggle('flip', facing==='user');
+  win=[];
+  if(!running){ running=true; requestAnimationFrame(loop); }
+  requestWakeLock();
+}
+
+async function requestWakeLock(){
+  try{ if('wakeLock' in navigator) await navigator.wakeLock.request('screen'); }catch(e){}
+}
+
+/* ---------- main loop ---------- */
+function loop(now){
+  requestAnimationFrame(loop);
+  if(!detector || video.readyState<2) return;
+
+  if(overlay.width!==video.videoWidth){
+    overlay.width=video.videoWidth; overlay.height=video.videoHeight;
+  }
+  if(lastT) fps = fps*0.9 + (1000/(now-lastT))*0.1;
+  lastT=now;
+
+  let dets=[];
+  try{ dets = detector.detectForVideo(video, now).detections || []; }catch(e){ return; }
+
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  drawCrosshair();
+
+  const face = pickCentermost(dets);
+  if(!face){ setLocked(false); return; }
+  setLocked(true);
+  drawBox(face);
+
+  const v = measure(face);
+  if(v!==null){
+    lastRaw=v;
+    win.push(v); if(win.length>CFG.WINDOW) win.shift();
+  }
+  render();
+}
+
+function pickCentermost(dets){
+  if(!dets.length) return null;
+  const cx=video.videoWidth/2, cy=video.videoHeight/2;
+  let best=null, bd=Infinity;
+  for(const d of dets){
+    const b=d.boundingBox; if(!b) continue;
+    const dx=(b.originX+b.width/2)-cx, dy=(b.originY+b.height/2)-cy;
+    const dist=dx*dx+dy*dy;
+    if(dist<bd){ bd=dist; best=d; }
+  }
+  return best;
+}
+
+/* 顔枠の中央 FACE_CROP を 32x32 に縮小描画してから平均を取る。
+   縮小はGPU側で平均化されるのでノイズ除去も兼ねる。 */
+function measure(det){
+  const b=det.boundingBox;
+  const m=(1-CFG.FACE_CROP)/2;
+  const sx=Math.round(b.originX+b.width*m), sy=Math.round(b.originY+b.height*m);
+  const sw=Math.round(b.width*CFG.FACE_CROP), sh=Math.round(b.height*CFG.FACE_CROP);
+  if(sw<4||sh<4) return null;
+  if(sx<0||sy<0||sx+sw>video.videoWidth||sy+sh>video.videoHeight) return null;
+
+  sctx.drawImage(video,sx,sy,sw,sh,0,0,CFG.SAMPLE_PX,CFG.SAMPLE_PX);
+  let d;
+  try{ d=sctx.getImageData(0,0,CFG.SAMPLE_PX,CFG.SAMPLE_PX).data; }catch(e){ return null; }
+
+  let R=0,G=0,B=0;
+  for(let i=0;i<d.length;i+=4){ R+=d[i]; G+=d[i+1]; B+=d[i+2]; }
+  const sum=R+G+B;
+  return sum>0 ? R/sum : null;
+}
+
+/* ---------- drawing (mirrored with the video via CSS) ---------- */
+function drawCrosshair(){
+  const w=overlay.width,h=overlay.height,cx=w/2,cy=h/2,r=Math.min(w,h)*0.045;
+  octx.strokeStyle='rgba(127,227,212,.7)'; octx.lineWidth=Math.max(2,w/400);
+  octx.beginPath();
+  octx.moveTo(cx-r,cy); octx.lineTo(cx-r*0.35,cy);
+  octx.moveTo(cx+r*0.35,cy); octx.lineTo(cx+r,cy);
+  octx.moveTo(cx,cy-r); octx.lineTo(cx,cy-r*0.35);
+  octx.moveTo(cx,cy+r*0.35); octx.lineTo(cx,cy+r);
+  octx.stroke();
+}
+
+function drawBox(det){
+  const b=det.boundingBox;
+  const m=(1-CFG.FACE_CROP)/2;
+  octx.strokeStyle='rgba(156,135,146,.6)'; octx.lineWidth=Math.max(1,overlay.width/700);
+  octx.strokeRect(b.originX,b.originY,b.width,b.height);
+  octx.strokeStyle='#E8615D'; octx.lineWidth=Math.max(2,overlay.width/350);
+  octx.strokeRect(b.originX+b.width*m, b.originY+b.height*m, b.width*CFG.FACE_CROP, b.height*CFG.FACE_CROP);
+}
+
+function setLocked(on){
+  const el=$('lockState');
+  el.classList.toggle('on',on);
+  el.textContent = on ? 'ロックオン' : '顔を探しています';
+  if(!on){ win=[]; lastRaw=null; render(); }
+  $('logBtn').disabled = !(on && win.length>=CFG.WINDOW);
+}
+
+/* ---------- render ---------- */
+function stats(){
+  if(!win.length) return null;
+  const n=win.length;
+  const mean=win.reduce((a,b)=>a+b,0)/n;
+  const varr=win.reduce((a,b)=>a+(b-mean)*(b-mean),0)/n;
+  return {mean, sd:Math.sqrt(varr), n};
+}
+
+const pos = v => Math.max(0,Math.min(1,(v-CFG.DOMAIN_MIN)/(CFG.DOMAIN_MAX-CFG.DOMAIN_MIN)))*100;
+
+function render(){
+  $('fps').textContent = fps?fps.toFixed(0)+' fps':'— fps';
+  const s=stats();
+  const meanEl=$('mean');
+
+  if(!s || s.n<5){
+    meanEl.textContent='0.0000'; meanEl.classList.add('stale');
+    $('sigma').textContent='σ —'; $('power').textContent='—';
+    $('band').style.display=$('meanMark').style.display=$('liveMark').style.display='none';
+    return;
+  }
+  meanEl.classList.remove('stale');
+  meanEl.textContent=s.mean.toFixed(4);
+  $('sigma').textContent='σ '+s.sd.toFixed(4);
+
+  const lo=pos(s.mean-s.sd), hi=pos(s.mean+s.sd);
+  const band=$('band');
+  band.style.display='block'; band.style.left=lo+'%'; band.style.width=Math.max(0.4,hi-lo)+'%';
+  const mm=$('meanMark'); mm.style.display='block'; mm.style.left=pos(s.mean)+'%';
+  if(lastRaw!==null){ const lm=$('liveMark'); lm.style.display='block'; lm.style.left=pos(lastRaw)+'%'; }
+
+  const t=(s.mean-CFG.DOMAIN_MIN)/(CFG.DOMAIN_MAX-CFG.DOMAIN_MIN);
+  const p=Math.round(CFG.POWER_MIN+Math.max(0,Math.min(1,t))*(CFG.POWER_MAX-CFG.POWER_MIN));
+  $('power').textContent=p.toLocaleString();
+
+  $('logBtn').disabled = s.n<CFG.WINDOW;
+}
+
+/* ---------- log ---------- */
+$('logBtn').addEventListener('click',()=>{
+  const s=stats(); if(!s) return;
+  const d=new Date();
+  rows.push({
+    t:d.toLocaleString('ja-JP'),
+    iso:d.toISOString(),
+    mean:s.mean.toFixed(5),
+    sd:s.sd.toFixed(5),
+    n:s.n,
+    note:$('note').value.trim()
+  });
+  const tb=$('tbody'), r=rows[rows.length-1];
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td>${r.t.split(' ').pop()}</td><td>${r.mean}</td><td>${r.sd}</td><td class="note"></td>`;
+  tr.lastElementChild.textContent=r.note||'—';
+  tb.prepend(tr);
+  $('tbl').style.display=''; $('logEmpty').style.display='none';
+  $('csvBtn').disabled=false;
+});
+
+$('csvBtn').addEventListener('click',()=>{
+  const head='iso,local,mean,sd,frames,note\n';
+  const body=rows.map(r=>[r.iso,r.t,r.mean,r.sd,r.n,'"'+r.note.replace(/"/g,'""')+'"'].join(',')).join('\n');
+  const blob=new Blob(['\uFEFF'+head+body],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='redness_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click(); URL.revokeObjectURL(a.href);
+});
+
+$('camBtn').addEventListener('click',()=>{ facing = facing==='user'?'environment':'user'; startCam(); });
+
+$('dmin').textContent=CFG.DOMAIN_MIN.toFixed(4);
+$('dmax').textContent=CFG.DOMAIN_MAX.toFixed(4);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) requestWakeLock(); });
+
+init();
+</script>
+</body>
+</html>
