@@ -50,6 +50,14 @@ html,body{height:100%;overflow:hidden;background:var(--void);
 #wash.fire{animation:flash 1.6s steps(1) 4}
 @keyframes flash{0%,49%{opacity:0}50%,99%{opacity:.18}}
 
+/* ---- title ---- */
+#title{position:absolute;top:calc(12px + env(safe-area-inset-top));left:0;right:0;
+  pointer-events:none;text-align:center}
+#title .t1{display:inline-block;color:var(--lens);font-size:clamp(.95rem,4.4vw,1.3rem);
+  font-weight:600;letter-spacing:.3em;text-indent:.3em;transform:skewX(-7deg);
+  text-shadow:0 0 6px rgba(140,255,168,.55)}
+#title .t2{margin-top:4px;color:var(--lens-dim);font-size:.62rem;letter-spacing:.24em;text-indent:.24em}
+
 /* ---- minimal chrome ---- */
 #flip{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;
   width:44px;height:44px;border:1px solid var(--lens-dim);border-radius:50%;
@@ -67,6 +75,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);
   <div id="camwrap"><video id="video" playsinline muted autoplay></video><canvas id="overlay"></canvas></div>
   <div id="glass"></div>
   <div id="wash"></div>
+  <div id="title"><span class="t1">酔ッ払イ戦闘力スカウター</span><br><span class="t2">顔ニ向ケテ画面ヲタップ</span></div>
   <div id="hud"><div id="digits">0</div></div>
   <div id="msg">起動中</div>
   <div id="flip">⟳</div>
@@ -184,7 +193,7 @@ async function startCam(){
   }catch(e){ msg.textContent='カメラ不可'; return; }
   video.srcObject=stream; await video.play();
   $('camwrap').classList.toggle('flip',facing==='user');
-  state='idle'; msg.textContent='画面をタップ';
+  state='idle'; msg.textContent='';
   if(!loopStarted){ loopStarted=true; requestAnimationFrame(loop); }   // カメラ切替で二重起動しない
   try{ if('wakeLock' in navigator) await navigator.wakeLock.request('screen'); }catch(e){}
 }
@@ -302,7 +311,7 @@ function finish(){
     state='done'; digits.className='on small';
     digits.textContent = diag.det===0 ? '対象ヲ検出デキズ' : '測定エラー';
     msg.textContent = `det ${diag.det}/${diag.frames}  meas ${diag.meas}`;   // 原因切り分け用
-    holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; msg.textContent='画面をタップ'; },3000);
+    holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; msg.textContent=''; },3000);
     return;
   }
   state='done';
@@ -329,7 +338,7 @@ function finish(){
   if(rare){ beepRare(); const w=$('wash'); w.classList.remove('fire'); void w.offsetWidth; w.classList.add('fire'); }
   else beepLock();
 
-  holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; $('wash').classList.remove('fire'); msg.textContent='画面をタップ'; },CFG.HOLD_MS);
+  holdTimer=setTimeout(()=>{ state='idle'; digits.className=''; $('wash').classList.remove('fire'); msg.textContent=''; },CFG.HOLD_MS);
 }
 
 /* ---------------- input ---------------- */
