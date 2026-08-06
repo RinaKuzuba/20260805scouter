@@ -126,15 +126,17 @@ async function loadMP(){
    [実測] = アップロード画像から算出   [推定] = 未検証。実測後に要調整
    ======================================================================= */
 const CFG = {
-  BASELINE:      0.3748,      // [実測] 腕の内側 R/(R+G+B)、明るさV=130に補正
+  FLOOR:         0.420,       // [実測] 素面おじさんの下端。ここ以下は全員5
+  KNEE:          0.440,       // [実測] 素面の上端。ここから二次曲線に切り替わる
+  TOP:           0.470,       // [実測] 泥酔顔の目安。ここで9000に到達
+  CURVE:         2,           // 二次曲線。3にすると立ち上がりがさらに遅く終盤が急に
   BRIGHT_SLOPE: -0.00033732,  // [実測] 明るさ1あたりの見かけの赤み変化
   REF_V:         130,         // [実測] 補正の基準明るさ
-  NOISE_SD:      0.0066,      // [実測] 補正後の残ノイズ（参考値）
+  NOISE_SD:      0.0005,      // [実測] 実機30フレームのブレ幅（同一姿勢・同一照明での値）
 
-  SPAN_NORMAL:   0.030,       // [推定] 戦闘力1200に到達する差分
-  SPAN_HIGH:     0.060,       // [推定] 戦闘力9000に到達する差分
 
   P_MAX: 1200, P_HIGH: 9000, P_SUPER: 530000, P_TOP: 1000000,
+  RARE_MIN: 3000,             // レア抽選が走る下限。素面(〜1200)では絶対に回らない
   ODDS_SUPER: 0.08, ODDS_TOP: 0.01, ODDS_NULL: 0.03,
   RARE_COOLDOWN_MS: 180000,   // レア後は再抽選を封じる
 
@@ -357,16 +359,16 @@ function finish(){
   }
   state='done';
 
-  const mean=win.reduce((a,b)=>a+b,0)/win.length;
-  const delta=mean-CFG.BASELINE;
+  const v=win.reduce((a,b)=>a+b,0)/win.length;
   let power, rare=false, label;
 
-  if(delta<=0) power=5;
-  else if(delta<CFG.SPAN_NORMAL) power=Math.round(5+(delta/CFG.SPAN_NORMAL)*(CFG.P_MAX-5));
-  else if(delta<CFG.SPAN_HIGH)   power=Math.round(CFG.P_MAX+((delta-CFG.SPAN_NORMAL)/(CFG.SPAN_HIGH-CFG.SPAN_NORMAL))*(CFG.P_HIGH-CFG.P_MAX));
+  if(v<=CFG.FLOOR)      power=5;                                    // 通常域: 線形
+  else if(v<CFG.KNEE)   power=Math.round(5+((v-CFG.FLOOR)/(CFG.KNEE-CFG.FLOOR))*(CFG.P_MAX-5));
+  else if(v<CFG.TOP)    power=Math.round(CFG.P_MAX                  // 酔い域: 二次曲線
+                          + Math.pow((v-CFG.KNEE)/(CFG.TOP-CFG.KNEE),CFG.CURVE)*(CFG.P_HIGH-CFG.P_MAX));
   else power=CFG.P_HIGH;
 
-  if(power>=CFG.P_MAX && Date.now()-lastRare>CFG.RARE_COOLDOWN_MS){
+  if(power>=CFG.RARE_MIN && Date.now()-lastRare>CFG.RARE_COOLDOWN_MS){
     const roll=Math.random();
     if(roll<CFG.ODDS_TOP){ power=CFG.P_TOP; rare=true; }
     else if(roll<CFG.ODDS_TOP+CFG.ODDS_NULL){ label='測定不能'; rare=true; }
