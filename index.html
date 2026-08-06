@@ -126,7 +126,7 @@ async function loadMP(){
    [実測] = アップロード画像から算出   [推定] = 未検証。実測後に要調整
    ======================================================================= */
 const CFG = {
-  FLOOR:         0.420,       // [実測] 素面おじさんの下端。ここ以下は全員5
+  FLOOR:         0.410,       // [実測] 素面おじさん(0.42〜0.44)の少し下。序盤から数値に差が出る
   KNEE:          0.440,       // [実測] 素面の上端。ここから二次曲線に切り替わる
   TOP:           0.470,       // [実測] 泥酔顔の目安。ここで9000に到達
   CURVE:         2,           // 二次曲線。3にすると立ち上がりがさらに遅く終盤が急に
@@ -136,6 +136,7 @@ const CFG = {
 
 
   P_MAX: 1200, P_HIGH: 9000, P_SUPER: 530000, P_TOP: 1000000,
+  HIGH_JITTER: 301,           // 上限到達時は P_HIGH 〜 P_HIGH+300 のランダム値
   RARE_MIN: 3000,             // レア抽選が走る下限。素面(〜1200)では絶対に回らない
   ODDS_SUPER: 0.08, ODDS_TOP: 0.01, ODDS_NULL: 0.03,
   RARE_COOLDOWN_MS: 180000,   // レア後は再抽選を封じる
@@ -366,7 +367,7 @@ function finish(){
   else if(v<CFG.KNEE)   power=Math.round(5+((v-CFG.FLOOR)/(CFG.KNEE-CFG.FLOOR))*(CFG.P_MAX-5));
   else if(v<CFG.TOP)    power=Math.round(CFG.P_MAX                  // 酔い域: 二次曲線
                           + Math.pow((v-CFG.KNEE)/(CFG.TOP-CFG.KNEE),CFG.CURVE)*(CFG.P_HIGH-CFG.P_MAX));
-  else power=CFG.P_HIGH;
+  else power=CFG.P_HIGH+Math.floor(Math.random()*CFG.HIGH_JITTER);   // 振り切れは9000台
 
   if(power>=CFG.RARE_MIN && Date.now()-lastRare>CFG.RARE_COOLDOWN_MS){
     const roll=Math.random();
